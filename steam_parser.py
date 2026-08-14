@@ -49,10 +49,8 @@ INTERESTING_QUALITIES = {
 }
 
 COURIER_TYPE_KEYWORDS = ("courier",)
-SUMMONED_SLOT_KEYWORDS = ("summoned unit", "призванное существо")
-TARGET_ITEM_NAMES = {
-    "almond the frondillo",
-}
+SUMMONED_SLOT_KEYWORDS = ("summoned unit")
+#TARGET_ITEM_NAMES = { "***"}
 ARCANA_RARITY_KEYWORDS = ("arcana", "rarity_arcana")
 
 # Empty sockets
