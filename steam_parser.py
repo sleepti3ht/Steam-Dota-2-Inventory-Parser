@@ -14,6 +14,7 @@ Features:
   - Slot: Summoned Unit
   - Gem flag: items whose text suggests a meaningful gem modifier
     (ignoring empty sockets and purely statistical counters)
+  - Hero filter: only 13 heroes with valuable gems + Couriers
 
 Output:
 - Prints CSV to stdout:
@@ -35,9 +36,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("steam-parser")
 
+
 STEAM_INVENTORY_URL = "https://steamcommunity.com/inventory/{steamid}/570/2?l=english&count=2000"
 CACHE_FILE = Path("steam_cache.json")
 CACHE_TTL_DAYS = 7
+
 
 INTERESTING_QUALITIES = {
     "auspicious",
@@ -48,10 +51,14 @@ INTERESTING_QUALITIES = {
     "inscribed",
 }
 
+
 COURIER_TYPE_KEYWORDS = ("courier",)
-SUMMONED_SLOT_KEYWORDS = ("summoned unit")
-#TARGET_ITEM_NAMES = { "***"}
+SUMMONED_SLOT_KEYWORDS = ("summoned unit", "призванное существо")
+TARGET_ITEM_NAMES = {
+    "almond the frondillo",
+}
 ARCANA_RARITY_KEYWORDS = ("arcana", "rarity_arcana")
+
 
 # Empty sockets
 IGNORE_GEM_PATTERNS = (
@@ -59,6 +66,7 @@ IGNORE_GEM_PATTERNS = (
     "empty socket",
     "socket empty",
 )
+
 
 # Pure stat gems (run counters, first blood stats, etc.)
 IGNORE_GEM_STAT_PATTERNS = (
@@ -71,6 +79,7 @@ IGNORE_GEM_STAT_PATTERNS = (
     "rune of the bladeform legacy",
 )
 
+
 # Meaningful gem modifiers
 INTERESTING_GEM_PATTERNS = (
     "kinetic gem",
@@ -80,6 +89,22 @@ INTERESTING_GEM_PATTERNS = (
 )
 
 
+# 13 heroes with valuable gems
+GEM_HEROES = {
+    "doom",
+    "juggernaut",
+    "kunkka",
+    "phantom lancer",
+    "puck",
+    "pudge",
+    "sven",
+    "techies",
+    "terrorblade",
+    "tusk",
+    "wrath king",
+}
+
+
 class SteamProfileParser:
     """
     Main parser class:
@@ -87,10 +112,13 @@ class SteamProfileParser:
     - extracts interesting items
     """
 
+
     def __init__(self) -> None:
         self.cache: Dict[str, Any] = {}
 
+
     # -------------------------- Cache management -------------------------- #
+
 
     def _load_cache(self) -> None:
         if CACHE_FILE.exists():
@@ -101,6 +129,7 @@ class SteamProfileParser:
             except Exception as e:
                 log.warning("Failed to load cache: %s", e)
                 self.cache = {}
+
 
     def _save_cache(self) -> None:
         try:
@@ -115,10 +144,12 @@ class SteamProfileParser:
         except Exception as e:
             log.warning("Failed to save cache: %s", e)
 
+
     def _is_cache_valid(self, profile_data: Dict[str, Any]) -> bool:
         cached_at = profile_data.get("cached_at")
         if not cached_at:
             return False
+
 
         try:
             cached_time = datetime.fromisoformat(cached_at)
@@ -126,13 +157,16 @@ class SteamProfileParser:
         except Exception:
             return False
 
+
     # -------------------------- HTTP fetching -------------------------- #
+
 
     async def fetch_profile(
         self, session: aiohttp.ClientSession, steamid: str
     ) -> Dict[str, Any] | None:
         """
         Returns inventory profile for given SteamID.
+
 
         Logic:
         - If profile is cached and still valid, return it.
@@ -141,8 +175,10 @@ class SteamProfileParser:
         - On success, cache the profile and return it.
         """
 
+
         url = STEAM_INVENTORY_URL.format(steamid=steamid)
         retry_pause = 120  # seconds to wait on 429 before retrying once
+
 
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
@@ -154,6 +190,7 @@ class SteamProfileParser:
                     )
                     await asyncio.sleep(retry_pause)
 
+
                     async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp2:
                         if resp2.status != 200:
                             log.warning(
@@ -164,9 +201,11 @@ class SteamProfileParser:
                             return None
                         data = await resp2.json()
 
+
                 elif resp.status == 403:
                     log.debug("Profile %s returned 403 (private/banned), skipping", steamid)
                     return None
+
 
                 elif resp.status != 200:
                     log.warning(
@@ -177,6 +216,7 @@ class SteamProfileParser:
                     return None
                 else:
                     data = await resp.json()
+
 
                 profile_data = {
                     "steamid": steamid,
@@ -194,6 +234,7 @@ class SteamProfileParser:
                 )
                 return profile_data
 
+
         except asyncio.TimeoutError:
             log.warning("Timeout fetching profile: %s", steamid)
             return None
@@ -201,7 +242,9 @@ class SteamProfileParser:
             log.exception("Error fetching profile %s: %s", steamid, e)
             return None
 
+
     # -------------------------- Helpers for tags -------------------------- #
+
 
     @staticmethod
     def _build_desc_map(descriptions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -210,9 +253,11 @@ class SteamProfileParser:
             for d in descriptions
         }
 
+
     @staticmethod
     def _extract_tags(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         return desc.get("tags") or []
+
 
     @staticmethod
     def _extract_quality(tags: List[Dict[str, Any]]) -> str:
@@ -225,12 +270,15 @@ class SteamProfileParser:
 ).lower()
             internal = str(tag.get("internal_name", "")).lower()
 
+
             if "quality" in category:
                 for q in INTERESTING_QUALITIES:
                     if q in name or q in internal:
                         return q.capitalize()
 
+
         return ""
+
 
     @staticmethod
     def _extract_rarity(tags: List[Dict[str, Any]]) -> str:
@@ -243,13 +291,16 @@ class SteamProfileParser:
 ).lower()
             internal = str(tag.get("internal_name", "")).lower()
 
+
             if "rarity" in category:
                 if any(kw in name for kw in ARCANA_RARITY_KEYWORDS) or any(
                     kw in internal for kw in ARCANA_RARITY_KEYWORDS
                 ):
                     return "Arcana"
 
+
         return ""
+
 
     @staticmethod
     def _extract_type(tags: List[Dict[str, Any]]) -> str:
@@ -262,13 +313,16 @@ class SteamProfileParser:
 ).lower()
             internal = str(tag.get("internal_name", "")).lower()
 
+
             if "type" in category:
                 if any(marker in name for marker in COURIER_TYPE_KEYWORDS) or any(
                     marker in internal for marker in COURIER_TYPE_KEYWORDS
                 ):
                     return "Courier"
 
+
         return ""
+
 
     @staticmethod
     def _extract_slot(tags: List[Dict[str, Any]]) -> str:
@@ -281,11 +335,13 @@ class SteamProfileParser:
                 or ""
             ).lower()
 
+
             if category == "slot" and (
                 internal == "summon"
                 or localized_name == "summoned unit"
             ):
                 return "Summoned Unit"
+
 
         return ""
     
@@ -296,14 +352,18 @@ class SteamProfileParser:
             desc.get("market_hash_name"),
         )
 
+
         for value in names_to_check:
             if not isinstance(value, str):
                 continue
 
+
             normalized_name = " ".join(value.lower().split())
+
 
             if normalized_name in TARGET_ITEM_NAMES:
                 return True
+
 
         return False
     
@@ -311,6 +371,7 @@ class SteamProfileParser:
     def _extract_gem_flag(desc: Dict[str, Any]) -> bool:
         """
         Gem flag with priority:
+
 
         1. Build blob from name, market_hash_name, descriptions.
         2. If blob contains any INTERESTING_GEM_PATTERNS -> True.
@@ -320,10 +381,12 @@ class SteamProfileParser:
         """
         parts: List[str] = []
 
+
         for key in ("name", "market_hash_name"):
             value = desc.get(key)
             if isinstance(value, str):
                 parts.append(value)
+
 
         extra_desc = desc.get("descriptions") or []
         for entry in extra_desc:
@@ -332,35 +395,85 @@ class SteamProfileParser:
                 if isinstance(value, str):
                     parts.append(value)
 
+
         blob = " ".join(parts).lower()
+
 
         if any(pattern in blob for pattern in INTERESTING_GEM_PATTERNS):
             return True
+
 
         if any(ignore in blob for ignore in IGNORE_GEM_PATTERNS):
             return False
         if any(ignore in blob for ignore in IGNORE_GEM_STAT_PATTERNS):
             return False
 
+
         return "gem" in blob
 
+
+    @staticmethod
+    def _extract_hero(desc: Dict[str, Any]) -> str:
+        """
+        Extract hero name from item description.
+        """
+        # Check in tags
+        tags = desc.get("tags") or []
+        for tag in tags:
+            category = str(tag.get("category", "")).lower()
+            name = str(
+                tag.get("localized_tag_name")
+                or tag.get("name")
+                or ""
+            ).lower()
+            internal = str(tag.get("internal_name", "")).lower()
+
+
+            if "hero" in category or "class" in category:
+                # Return first word (hero name)
+                hero_name = name.split()[0] if name else ""
+                if hero_name:
+                    return hero_name.capitalize()
+
+
+        # Check in name/market_hash_name
+        for key in ("name", "market_hash_name"):
+            value = desc.get(key)
+            if isinstance(value, str):
+                # Try to extract hero name from item name
+                # Example: "Juggernaut's Blade" -> "Juggernaut"
+                parts = value.lower().split()
+                if parts:
+                    hero_candidate = parts[0].capitalize()
+                    if hero_candidate.lower() in GEM_HEROES:
+                        return hero_candidate
+
+
+        return ""
+
+
     # -------------------------- Trade info -------------------------- #
+
 
     @staticmethod
     def _extract_trade_info(asset: Dict[str, Any]) -> Dict[str, str]:
         restriction = asset.get("market_tradable_restriction")
         tradable_after = asset.get("tradable_after")
 
+
         flags = []
         if restriction is not None:
             flags.append(f"restriction={restriction}")
+
 
         return {
             "trade_flags": ",".join(flags),
             "tradable_after": str(tradable_after) if tradable_after is not None else "",
         }
 
+
     # -------------------------- Main extraction -------------------------- #
+
 
     def extract_interesting_items(
         self, profile_data: Dict[str, Any]
@@ -368,8 +481,10 @@ class SteamProfileParser:
         assets = profile_data.get("assets", [])
         descriptions = profile_data.get("descriptions", [])
 
+
         desc_map = self._build_desc_map(descriptions)
         results: List[Dict[str, Any]] = []
+
 
         for asset in assets:
             classid = asset.get("classid")
@@ -377,27 +492,60 @@ class SteamProfileParser:
             if not classid:
                 continue
 
+
             desc_key = f"{classid}_{instanceid}"
             desc = desc_map.get(desc_key, {})
+
 
             item_name = desc.get("name", "Unknown")
             is_target_item = self._is_target_item(desc)
 
+
             tags = self._extract_tags(desc)
+
 
             quality = self._extract_quality(tags)
             rarity = self._extract_rarity(tags)
             item_type = self._extract_type(tags)
             slot = self._extract_slot(tags)
             has_gem = self._extract_gem_flag(desc)
+            hero = self._extract_hero(desc)
+
 
             if is_target_item:
                 slot = "Summoned Unit"
 
-            if not any([quality, rarity, item_type, slot, has_gem]):
+
+            # Filter: only 13 heroes with gems OR couriers
+            should_include = False
+
+
+            # Couriers (by type)
+            if item_type == "Courier":
+                should_include = True
+
+
+            # Heroes with gems (only 13 specified)
+            elif has_gem and hero.lower() in GEM_HEROES:
+                should_include = True
+
+
+            # Target items (Almond, etc.)
+            elif is_target_item:
+                should_include = True
+
+
+            # Other interesting items (quality, rarity, slot)
+            elif any([quality, rarity, slot]):
+                should_include = True
+
+
+            if not should_include:
                 continue
 
+
             trade_info = self._extract_trade_info(asset)
+
 
             results.append(
                 {
@@ -407,15 +555,19 @@ class SteamProfileParser:
                     "rarity": rarity,
                     "type": item_type,
                     "slot": slot,
+                    "hero": hero,
                     "has_gem": "yes" if has_gem else "",
                     "trade_flags": trade_info["trade_flags"],
                     "tradable_after": trade_info["tradable_after"],
                 }
             )
 
+
         return results
 
+
     # -------------------------- Parsing profiles -------------------------- #
+
 
     async def parse_profiles(
         self, steamids: List[str], max_concurrent: int = 1, delay: float = 4.0
@@ -428,6 +580,7 @@ class SteamProfileParser:
                 await asyncio.sleep(delay)
                 return profile
 
+
         async with aiohttp.ClientSession() as session:
             semaphore = asyncio.Semaphore(max_concurrent)
             tasks = [
@@ -436,7 +589,9 @@ class SteamProfileParser:
             ]
             profiles = await asyncio.gather(*tasks, return_exceptions=True)
 
+
         all_items: List[Dict[str, Any]] = []
+
 
         for profile_data in profiles:
             if isinstance(profile_data, Exception):
@@ -444,8 +599,10 @@ class SteamProfileParser:
             if profile_data is None:
                 continue
 
+
             items = self.extract_interesting_items(profile_data)
             all_items.extend(items)
+
 
         log.info(
             "Parsed %d profiles, found %d interesting items",
@@ -453,17 +610,21 @@ class SteamProfileParser:
             len(all_items),
         )
 
+
         return all_items
 
 
 # -------------------------- Script entrypoint -------------------------- #
 
+
 async def main() -> None:
     steamids_file = Path("steamids.txt")
+
 
     if not steamids_file.exists():
         log.error("steamids.txt not found. Create it with one SteamID64 per line.")
         return
+
 
     steamids = [
         line.strip()
@@ -471,17 +632,22 @@ async def main() -> None:
         if line.strip() and not line.startswith("#")
     ]
 
+
     if not steamids:
         log.error("No SteamIDs found in steamids.txt")
         return
 
+
     log.info("Loaded %d SteamIDs from steamids.txt", len(steamids))
+
 
     parser = SteamProfileParser()
     items = await parser.parse_profiles(steamids, max_concurrent=1, delay=4.0)
 
+
     # CSV header
-    print("SteamID;Name;Quality;Rarity;Type;Slot;HasGem;TradeFlags;TradableAfter;ProfileURL")
+    print("SteamID;Name;Quality;Rarity;Type;Slot;Hero;HasGem;TradeFlags;TradableAfter;ProfileURL")
+
 
     for item in items:
         steamid = item["steamid"]
@@ -490,14 +656,17 @@ async def main() -> None:
         rarity = item["rarity"]
         item_type = item["type"]
         slot = item["slot"]
+        hero = item["hero"]
         has_gem = item["has_gem"]
         trade_flags = item["trade_flags"]
         tradable_after = item["tradable_after"]
         profile_url = f"https://steamcommunity.com/profiles/{steamid}/inventory"
 
+
         print(
-            f"{steamid};{name};{quality};{rarity};{item_type};{slot};{has_gem};{trade_flags};{tradable_after};{profile_url}"
+            f"{steamid};{name};{quality};{rarity};{item_type};{slot};{hero};{has_gem};{trade_flags};{tradable_after};{profile_url}"
         )
+
 
     log.info("Total interesting items: %d", len(items))
 
