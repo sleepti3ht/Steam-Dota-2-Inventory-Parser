@@ -177,7 +177,7 @@ class SteamProfileParser:
 
 
         url = STEAM_INVENTORY_URL.format(steamid=steamid)
-        retry_pause = 120  # seconds to wait on 429 before retrying once
+        retry_pause = 90  # seconds to wait on 429 before retrying once
 
 
         try:
