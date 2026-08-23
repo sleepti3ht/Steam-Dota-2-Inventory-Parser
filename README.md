@@ -180,7 +180,7 @@ Current behavior:
 |---|---|---|
 | `200` | Inventory successfully retrieved | Processes items |
 | `403` | Access to inventory forbidden | Skips profile immediately |
-| `429` | Too many requests | Waits 120 seconds and retries the request once |
+| `429` | Too many requests | Waits 90 seconds and retries the request once |
 | Other code | Request/server error | Logs and skips profile |
 
 Sequential checking parameters are set in `main()`:
