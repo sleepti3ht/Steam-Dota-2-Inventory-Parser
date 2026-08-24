@@ -618,38 +618,34 @@ class SteamProfileParser:
 
 
 async def main() -> None:
+    import sys
+    sys.stdout.reconfigure(encoding='utf-8')
+    
     steamids_file = Path("steamids.txt")
-
-
+    
     if not steamids_file.exists():
         log.error("steamids.txt not found. Create it with one SteamID64 per line.")
         return
-
-
+    
     steamids = [
         line.strip()
         for line in steamids_file.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     ]
-
-
+    
     if not steamids:
         log.error("No SteamIDs found in steamids.txt")
         return
-
-
+    
     log.info("Loaded %d SteamIDs from steamids.txt", len(steamids))
-
-
+    
     parser = SteamProfileParser()
     items = await parser.parse_profiles(steamids, max_concurrent=1, delay=4.0)
-
-
+    
     # CSV header
     csv_header = "SteamID;Name;Quality;Rarity;Type;Slot;Hero;HasGem;TradeFlags;TradableAfter;ProfileURL"
     csv_lines = [csv_header]
-
-
+    
     for item in items:
         steamid = item["steamid"]
         name = item["name"].replace(";", ",")
@@ -662,26 +658,25 @@ async def main() -> None:
         trade_flags = item["trade_flags"]
         tradable_after = item["tradable_after"]
         profile_url = f"https://steamcommunity.com/profiles/{steamid}/inventory"
-
-
+        
         csv_line = (
             f"{steamid};{name};{quality};{rarity};{item_type};{slot};{hero};"
             f"{has_gem};{trade_flags};{tradable_after};{profile_url}"
         )
         csv_lines.append(csv_line)
-
-
+    
     # Save to file
-    OUTPUT_FILE.write_text("\n".join(csv_lines), encoding="utf-8")
-    log.info("Saved %d items to %s", len(items), OUTPUT_FILE)
-
-
+    try:
+        OUTPUT_FILE.write_text("\n".join(csv_lines), encoding="utf-8")
+        log.info("Saved %d items to %s", len(items), OUTPUT_FILE)
+    except PermissionError:
+        log.error("File %s is open in another program. Close it and run again.", OUTPUT_FILE)
+    
     # Also print to stdout
     print(csv_header)
     for line in csv_lines[1:]:
         print(line)
-
-
+    
     log.info("Total interesting items: %d", len(items))
 
 
