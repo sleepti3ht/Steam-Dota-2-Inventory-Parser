@@ -12,7 +12,7 @@ The script reads a list of SteamID64 from `steamids.txt`, requests public Dota 2
 - Reads SteamID64 from `steamids.txt`
 - Checks public Dota 2 inventories via Steam Community Inventory API
 - Works sequentially with configurable pause between profiles
-- On HTTP `429 Too Many Requests`, waits 90 seconds and retries the request once
+- On HTTP `429 Too Many Requests`, waits 80 seconds and retries the request once
 - On HTTP `403 Forbidden`, skips the profile immediately
 - Exports results to CSV for Excel
 - Finds items based on the following conditions:
