@@ -17,8 +17,7 @@ Features:
   - Hero filter: only 13 heroes with valuable gems + Couriers
 
 Output:
-- Prints CSV to stdout:
-  SteamID;Name;Quality;Rarity;Type;Slot;HasGem;TradeFlags;TradableAfter;ProfileURL
+- Prints CSV to stdout AND saves to steam_output.csv
 """
 
 import asyncio
@@ -39,6 +38,7 @@ log = logging.getLogger("steam-parser")
 
 STEAM_INVENTORY_URL = "https://steamcommunity.com/inventory/{steamid}/570/2?l=english&count=2000"
 CACHE_FILE = Path("steam_cache.json")
+OUTPUT_FILE = Path("steam_output.csv")
 CACHE_TTL_DAYS = 7
 
 
@@ -177,7 +177,7 @@ class SteamProfileParser:
 
 
         url = STEAM_INVENTORY_URL.format(steamid=steamid)
-        retry_pause = 90  # seconds to wait on 429 before retrying once
+        retry_pause = 80  # seconds to wait on 429 before retrying once
 
 
         try:
@@ -646,7 +646,8 @@ async def main() -> None:
 
 
     # CSV header
-    print("SteamID;Name;Quality;Rarity;Type;Slot;Hero;HasGem;TradeFlags;TradableAfter;ProfileURL")
+    csv_header = "SteamID;Name;Quality;Rarity;Type;Slot;Hero;HasGem;TradeFlags;TradableAfter;ProfileURL"
+    csv_lines = [csv_header]
 
 
     for item in items:
@@ -663,9 +664,22 @@ async def main() -> None:
         profile_url = f"https://steamcommunity.com/profiles/{steamid}/inventory"
 
 
-        print(
-            f"{steamid};{name};{quality};{rarity};{item_type};{slot};{hero};{has_gem};{trade_flags};{tradable_after};{profile_url}"
+        csv_line = (
+            f"{steamid};{name};{quality};{rarity};{item_type};{slot};{hero};"
+            f"{has_gem};{trade_flags};{tradable_after};{profile_url}"
         )
+        csv_lines.append(csv_line)
+
+
+    # Save to file
+    OUTPUT_FILE.write_text("\n".join(csv_lines), encoding="utf-8")
+    log.info("Saved %d items to %s", len(items), OUTPUT_FILE)
+
+
+    # Also print to stdout
+    print(csv_header)
+    for line in csv_lines[1:]:
+        print(line)
 
 
     log.info("Total interesting items: %d", len(items))
