@@ -89,13 +89,13 @@ Use SteamID64 specifically, not a profile link or account short name.
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\steam_parser.py > steam_output.csv
+.\.venv\Scripts\python.exe .\steam_parser.py
 ```
 
-### Regular Run
+### Regular Run (output to file only)
 
 ```bash
-python steam_parser.py > steam_output.csv
+python steam_parser.py > steam_output.csv 2>&1
 ```
 
 After completion, a file will appear:
@@ -138,7 +138,7 @@ The script now filters items by **13 heroes with valuable gems**:
 
 Only items from these heroes **with gems** are included in the results.
 
-Couriers and target items (e.g. `Not stated`) are still included regardless of hero.
+Couriers and target items (e.g. `YOUR ITEM`) are still included regardless of hero.
 
 ## Summoned Unit Filtering
 
@@ -180,7 +180,7 @@ Current behavior:
 |---|---|---|
 | `200` | Inventory successfully retrieved | Processes items |
 | `403` | Access to inventory forbidden | Skips profile immediately |
-| `429` | Too many requests | Waits 90 seconds and retries the request once |
+| `429` | Too many requests | Waits 80 seconds and retries the request once |
 | Other code | Request/server error | Logs and skips profile |
 
 Sequential checking parameters are set in `main()`:
@@ -225,12 +225,12 @@ To enable filtering in Excel:
 
 ### Successful Scan Log
 
-<img width="1087" height="346" alt="pHUqBBEqGR" src="https://github.com/user-attachments/assets/bb14b1a3-ac54-4736-a540-3378b3405532" />
-
+![Successful Scan Log](screenshots/successful_scan_log_1.png)
+![Successful Scan Log](screenshots/successful_scan_log_2.png)
 
 ### CSV Output Example
 
-
+![CSV Output Example](screenshots/csv_output_example.png)
 
 ## Notes
 
