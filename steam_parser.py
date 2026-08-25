@@ -167,80 +167,78 @@ class SteamProfileParser:
         """
         Returns inventory profile for given SteamID.
 
-
         Logic:
         - If profile is cached and still valid, return it.
         - Otherwise, request Steam inventory endpoint.
-        - On HTTP 429 (Too Many Requests), waits briefly and retries once.
+        - On HTTP 429 (Too Many Requests), waits and retries up to 3 times.
         - On success, cache the profile and return it.
         """
 
-
         url = STEAM_INVENTORY_URL.format(steamid=steamid)
-        retry_pause = 80  # seconds to wait on 429 before retrying once
+        retry_pause = 80  # seconds to wait on 429 before retrying
+        max_retries = 3
 
-
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status == 429:
-                    log.warning(
-                        "HTTP 429 for profile %s, waiting %d seconds before retry",
-                        steamid,
-                        retry_pause,
-                    )
-                    await asyncio.sleep(retry_pause)
-
-
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp2:
-                        if resp2.status != 200:
+        for attempt in range(max_retries):
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 429:
+                        if attempt < max_retries - 1:
                             log.warning(
-                                "Retry failed for profile %s: status=%s",
+                                "HTTP 429 for profile %s (attempt %d/%d), waiting %d seconds",
                                 steamid,
-                                resp2.status,
+                                attempt + 1,
+                                max_retries,
+                                retry_pause,
+                            )
+                            await asyncio.sleep(retry_pause)
+                            continue  # Retry
+                        else:
+                            log.warning(
+                                "HTTP 429 for profile %s: all %d retries exhausted, skipping",
+                                steamid,
+                                max_retries,
                             )
                             return None
-                        data = await resp2.json()
 
+                    elif resp.status == 403:
+                        log.debug("Profile %s returned 403 (private/banned), skipping", steamid)
+                        return None
 
-                elif resp.status == 403:
-                    log.debug("Profile %s returned 403 (private/banned), skipping", steamid)
-                    return None
+                    elif resp.status != 200:
+                        log.warning(
+                            "Failed to fetch profile %s: status=%s",
+                            steamid,
+                            resp.status,
+                        )
+                        return None
+                    else:
+                        data = await resp.json()
+                        break  # Success!
 
+            except asyncio.TimeoutError:
+                log.warning("Timeout fetching profile %s (attempt %d/%d)", steamid, attempt + 1, max_retries)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_pause)
+                    continue
+                return None
+            except Exception as e:
+                log.exception("Error fetching profile %s: %s", steamid, e)
+                return None
 
-                elif resp.status != 200:
-                    log.warning(
-                        "Failed to fetch profile %s: status=%s",
-                        steamid,
-                        resp.status,
-                    )
-                    return None
-                else:
-                    data = await resp.json()
+        profile_data = {
+            "steamid": steamid,
+            "cached_at": datetime.now().isoformat(),
+            "assets": data.get("assets", []),
+            "descriptions": data.get("descriptions", []),
+        }
 
-
-                profile_data = {
-                    "steamid": steamid,
-                    "cached_at": datetime.now().isoformat(),
-                    "assets": data.get("assets", []),
-                    "descriptions": data.get("descriptions", []),
-                }
-
-
-                log.info(
-                    "Fetched and cached profile: %s (assets=%d, descriptions=%d)",
-                    steamid,
-                    len(profile_data["assets"]),
-                    len(profile_data["descriptions"]),
-                )
-                return profile_data
-
-
-        except asyncio.TimeoutError:
-            log.warning("Timeout fetching profile: %s", steamid)
-            return None
-        except Exception as e:
-            log.exception("Error fetching profile %s: %s", steamid, e)
-            return None
+        log.info(
+            "Fetched and cached profile: %s (assets=%d, descriptions=%d)",
+            steamid,
+            len(profile_data["assets"]),
+            len(profile_data["descriptions"]),
+        )
+        return profile_data
 
 
     # -------------------------- Helpers for tags -------------------------- #
