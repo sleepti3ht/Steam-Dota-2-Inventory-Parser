@@ -130,7 +130,7 @@ After completion, a file appears: `steam_output.csv`
 
 ## 🎯 Hero + Gem Filter
 
-The script filters items by **11 heroes with valuable gems**:
+The script filters items by **12 heroes with valuable gems**:
 
 - `Doom`
 - `Juggernaut`
