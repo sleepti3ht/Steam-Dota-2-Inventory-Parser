@@ -1,39 +1,48 @@
 # Steam Dota 2 Inventory Parser
 
-A small Python script for sequentially checking public Dota 2 Steam inventories and exporting items of interest to CSV.
+> Small Python script for sequentially checking public Dota 2 Steam inventories and exporting items of interest to CSV.
 
-The script reads a list of SteamID64 from `steamids.txt`, requests public Dota 2 inventory, and saves only items that match at least one specified filter to a table.
+![python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![status](https://img.shields.io/badge/status-active-success)
+![steam](https://img.shields.io/badge/Steam-public%20inventories-1b2838)
+
+The script reads a list of SteamID64 from `steamids.txt`, requests public Dota 2 inventories, and saves only items that match at least one specified filter to a table.
 
 > This project is intended to work only with publicly available Steam data.  
 > The script does not buy, sell, or exchange items or accounts.
 
-## Features
+---
+
+## ✨ Features
 
 - Reads SteamID64 from `steamids.txt`
 - Checks public Dota 2 inventories via Steam Community Inventory API
 - Works sequentially with configurable pause between profiles
-- On HTTP `429 Too Many Requests`, waits 80 seconds and retries the request once
+- On HTTP `429 Too Many Requests`, waits **80 seconds** and retries up to 3 times
 - On HTTP `403 Forbidden`, skips the profile immediately
-- Exports results to CSV for Excel
-- Finds items based on the following conditions:
-  - **Quality**: `Auspicious`, `Genuine`, `Unusual`, `Corrupted`, `Autographed`, `Inscribed`
-  - **Rarity**: `Arcana`
-  - **Type**: `Courier`
-  - **Slot**: `Summoned Unit`
-  - **Hero + Gem**: Only 13 heroes with valuable gems (Doom, Juggernaut, Kunkka, Phantom Lancer, Puck, Pudge, Sven, Techies, Terrorblade, Tusk, Wraith King)
-  - **Target Items**: `YOUR ITEM` and similar
+- Caches ответы to `steam_cаche.json` (TTL 7 days) — меньше 429 при повтortных запусках
+- Exports results to CSV (semicolon-separated, `;`) for Excel
 - Correctly detects items with `Summoned Unit` slot, including **Maraxiform's Fallen**
 - Independent of displayed item name: renaming an instance doesn't interfere with slot determination
 
-## Requirements
+### Item Filters
+
+- **Quality**: `Auspicious`, `Genuine`, `Unusual`, `Corrupted`, `Autographed`, `Inscribed`
+- **Rarity**: `Arcana`
+- **Type**: `Courier`
+- **Slot**: `Summoned Unit`
+- **Hero + Gem**: only `12` heroes with valuable gems (see below)
+- **Target Items**: `Almond the Frondillo` (override — matched by name regardless of hero)
+
+---
+
+## 🛠 Requirements
 
 - Python 3.10+
 - Access to public Steam Community inventories
 - `aiohttp` library
 
-## Installation
-
-Clone the repository:
+## 📦 Installation
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/steam-dota2-inventory-parser.git
@@ -43,32 +52,29 @@ cd steam-dota2-inventory-parser
 Create and activate a virtual environment.
 
 ### Windows PowerShell
-
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
 ### Windows CMD
-
 ```bat
 python -m venv .venv
 .venv\Scripts\activate.bat
 ```
 
-Install dependencies:
-
+### Install dependencies
 ```bash
-pip install aiohttp
+pip install -r requirements.txt
 ```
 
-## Preparing SteamID List
+---
 
-Create a file `steamids.txt` in the script folder.
+## 📄 Preparing SteamID List
 
-One SteamID64 per line:
+Create `steamids.txt` in the script folder. One SteamID64 per line:
 
-```text
+```
 76561198000000001
 76561198000000002
 76561198000000003
@@ -76,35 +82,33 @@ One SteamID64 per line:
 
 Lines starting with `#` are ignored:
 
-```text
+```
 # Test profiles
 76561198000000001
 76561198000000002
 ```
 
-Use SteamID64 specifically, not a profile link or account short name.
+Use **SteamID64 specifically**, not a profile link or account short name.
 
-## Running
+---
+
+## 🚀 Running
 
 ### Windows PowerShell
-
 ```powershell
 .\.venv\Scripts\python.exe .\steam_parser.py
 ```
 
-### Regular Run (output to file only)
-
+### Regular run (output to file only)
 ```bash
 python steam_parser.py > steam_output.csv 2>&1
 ```
 
-After completion, a file will appear:
+After completion, a file appears: `steam_output.csv`
 
-```text
-steam_output.csv
-```
+---
 
-## CSV Columns
+## 📊 CSV Columns
 
 | Column | Description |
 |---|---|
@@ -117,12 +121,16 @@ steam_output.csv
 | `Hero` | Hero name if detected (e.g. `Pudge`, `Juggernaut`) |
 | `HasGem` | `yes` if a matching gem modifier is found |
 | `TradeFlags` | Trading restrictions from inventory data |
-| `TradableAfter` | Time when the item becomes tradable again, if provided by Steam |
+| `TradableAfter` | Time when the item becomes tradable again |
 | `ProfileURL` | Link to the profile inventory |
 
-## Hero + Gem Filter
+> The CSV uses `;` as separator — double-click opens correctly in Excel (RU/DE locales).
 
-The script now filters items by **13 heroes with valuable gems**:
+---
+
+## 🎯 Hero + Gem Filter
+
+The script filters items by **11 heroes with valuable gems**:
 
 - `Doom`
 - `Juggernaut`
@@ -136,31 +144,29 @@ The script now filters items by **13 heroes with valuable gems**:
 - `Tusk`
 - `Wraith King`
 
-Only items from these heroes **with gems** are included in the results.
+Only items from these heroes **with gems** are included. Couriers and target items (e.g. `Almond the Frondillo`) are included regardless of hero.
 
-Couriers and target items (e.g. `YOUR ITEM`) are still included regardless of hero.
+---
 
-## Summoned Unit Filtering
+## 🔍 Summoned Unit Filtering
 
 For items in the `Summoned Unit` slot, the Steam API tag is used:
 
-```text
+```
 category = Slot
 internal_name = summon
 localized_tag_name = Summoned Unit
 ```
 
-For example, `Maraxiform's Fallen` is identified by slot, not just by name. Therefore, even if the owner has renamed the item, filtering should still work.
+For example, `Maraxiform's Fallen` is identified by slot, not just by name. Even if the owner renamed the item, filtering still works.
 
-In the Steam API, the display name of the tag is usually in the field:
+In the Steam API, the display name of the tag is usually in:
 
 ```python
 localized_tag_name
 ```
 
-not necessarily in the `name` field.
-
-For handling tags, it's recommended to use:
+not necessarily in the `name` field. For handling tags, it's recommended to use:
 
 ```python
 name = str(
@@ -168,20 +174,21 @@ name = str(
     or tag.get("name")
     or ""
 ).lower()
+)
 ```
 
-## Request Rate Limiting
+---
 
-The script does not attempt to bypass Steam's limitations.
+## ⏱ Request Rate Limiting
 
-Current behavior:
+The script does not attempt to bypass Steam limitations.
 
 | HTTP Code | Meaning | Script Action |
 |---|---|---|
 | `200` | Inventory successfully retrieved | Processes items |
 | `403` | Access to inventory forbidden | Skips profile immediately |
-| `429` | Too many requests | Waits 80 seconds and retries the request once |
-| Other code | Request/server error | Logs and skips profile |
+| `429` | Too many requests | Waits **80 seconds**, retries (up to 3 attempts total) |
+| Other | Request/server error | Logs and skips profile |
 
 Sequential checking parameters are set in `main()`:
 
@@ -193,19 +200,17 @@ items = await parser.parse_profiles(
 )
 ```
 
-It's recommended to keep:
+It's recommended to keep `max_concurrent=1` — reduces the likelihood of `429`.
 
-```python
-max_concurrent=1
+> **Why 80 seconds?** This pause was tested against various values (120/90/70/80) — 80s is the sweet spot to reliably bypass the 429 limit.
+
+---
+
+## 🧮 Excel and SteamID64
+
+SteamID64 consists of 17 digits. Excel might display it in scientific notation:
+
 ```
-
-This reduces the likelihood of getting `429 Too Many Requests`.
-
-## Excel and SteamID64
-
-SteamID64 consists of 17 digits. Excel might display it in scientific notation, for example:
-
-```text
 7.65612E+16
 ```
 
@@ -214,33 +219,32 @@ and lose precision when saving again.
 When importing CSV, specify **Text** format for the `SteamID` column.
 
 To enable filtering in Excel:
-
 1. Open `steam_output.csv`
 2. Select any cell in the table
 3. Open the **Data** tab
 4. Click **Filter**
-5. When sorting, enable the option **My data has headers**
+5. When sorting, enable **My data has headers**
 
-## Screenshots
+---
+
+## 📸 Screenshots
 
 ### Successful Scan Log
 
-![Successful Scan Log](screenshots/successful_scan_log_1.png)
-![Successful Scan Log](screenshots/successful_scan_log_2.png)
+<table>
+  <tr>
+    <td align="center"><img src="screenshots/successful_scan_log_1.png" width="460"/></td>
+    <td align="center"><img src="screenshots/successful_scan_log_2.png" width="460"/></td>
+  </tr>
+</table>
 
 ### CSV Output Example
 
-![CSV Output Example](screenshots/csv_output_example.png)
+<p align="center"><img src="screenshots/csv_output_example.png" width="700"/></p>
 
-## Notes
+---
 
-- The script only sees public inventories.
-- HTTP `403` might mean private inventory, access restriction, or unavailable profile; it's not necessarily an account ban.
-- Item states are current only at the time of request: an item might be bought, sold, or traded after scanning.
-- Custom item names might display incorrectly with encoding issues, but filtering by technical Steam tags isn't affected by this.
-- Don't publish personal SteamID lists, tokens, cookies, or other private data in GitHub repositories.
-
-## Project Structure
+## 📁 Project Structure
 
 ```text
 steam-dota2-inventory-parser/
@@ -250,47 +254,30 @@ steam-dota2-inventory-parser/
 ├── README.md
 ├── .gitignore
 └── screenshots/
-    ├── successful_scan_log.png
+    ├── successful_scan_log_1.png
+    ├── successful_scan_log_2.png
     └── csv_output_example.png
 ```
 
-## requirements.txt
-
-Create a `requirements.txt` file:
+Generated at runtime (not committed):
 
 ```text
-aiohttp>=3.9
-```
-
-Installing dependencies would then look like:
-
-```bash
-pip install -r requirements.txt
-```
-
-## .gitignore
-
-Create a `.gitignore` to avoid committing personal data and scan results to GitHub:
-
-```gitignore
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-# Local input/output
-steamids.txt
 steam_output.csv
 steam_cache.json
-# Logs
-*.log
-# IDE
-.vscode/
-.idea/
-# Screenshots (optional)
-screenshots/*.png
 ```
 
-## License
+---
+
+## 📝 Notes
+
+- The script only sees public inventories.
+- HTTP `403` might mean private inventory, access restriction, or unavailable profile; it's not necessarily an account ban.
+- Item states are current only at scan time: an item might be bought, sold, or traded afterwards.
+- Custom item names might display incorrectly with encoding issues, but filtering by technical Steam tags isn't affected.
+- Don't publish personal SteamID lists, tokens, cookies, or other private data in GitHub repositories.
+
+---
+
+## ⚠️ Disclaimer
 
 Use the project at your own risk and comply with Steam rules, public endpoint limitations, and applicable platform regulations.
