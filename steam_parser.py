@@ -14,7 +14,7 @@ Features:
   - Slot: Summoned Unit
   - Gem flag: items whose text suggests a meaningful gem modifier
     (ignoring empty sockets and purely statistical counters)
-  - Hero filter: only 13 heroes with valuable gems + Couriers
+  - Hero filter: only 12 heroes with valuable gems + Couriers
 
 Output:
 - Prints CSV to stdout AND saves to steam_output.csv
@@ -515,7 +515,7 @@ class SteamProfileParser:
                 slot = "Summoned Unit"
 
 
-            # Filter: only 13 heroes with gems OR couriers
+            # Filter: only 12 heroes with gems OR couriers
             should_include = False
 
 
@@ -524,7 +524,7 @@ class SteamProfileParser:
                 should_include = True
 
 
-            # Heroes with gems (only 13 specified)
+            # Heroes with gems (only 12 specified)
             elif has_gem and hero.lower() in GEM_HEROES:
                 should_include = True
 
