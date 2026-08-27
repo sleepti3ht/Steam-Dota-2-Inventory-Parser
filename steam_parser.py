@@ -1,283 +1,683 @@
-# Steam Dota 2 Inventory Parser
+"""
+steam_parser.py
 
-> Small Python script for sequentially checking public Dota 2 Steam inventories and exporting items of interest to CSV.
+Educational Steam inventory parser for Dota 2 profiles.
 
-![python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![status](https://img.shields.io/badge/status-active-success)
-![steam](https://img.shields.io/badge/Steam-public%20inventories-1b2838)
+Features:
+- Reads a list of SteamIDs from steamids.txt
+- Fetches Dota 2 inventories via Steam's public inventory endpoint
+- Caches responses for CACHE_TTL_DAYS
+- Extracts interesting items based on:
+  - Quality: Auspicious, Genuine, Unusual, Corrupted, Autographed, Inscribed
+  - Rarity: Arcana
+  - Type: Courier
+  - Slot: Summoned Unit
+  - Gem flag: items whose text suggests a meaningful gem modifier
+    (ignoring empty sockets and purely statistical counters)
+  - Hero filter: only 13 heroes with valuable gems + Couriers
 
-The script reads a list of SteamID64 from `steamids.txt`, requests public Dota 2 inventories, and saves only items that match at least one specified filter to a table.
+Output:
+- Prints CSV to stdout AND saves to steam_output.csv
+"""
 
-> This project is intended to work only with publicly available Steam data.  
-> The script does not buy, sell, or exchange items or accounts.
+import asyncio
+import aiohttp
+import json
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
+from datetime import datetime, timedelta
 
----
 
-## ✨ Features
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+log = logging.getLogger("steam-parser")
 
-- Reads SteamID64 from `steamids.txt`
-- Checks public Dota 2 inventories via Steam Community Inventory API
-- Works sequentially with configurable pause between profiles
-- On HTTP `429 Too Many Requests`, waits **80 seconds** and retries up to 3 times
-- On HTTP `403 Forbidden`, skips the profile immediately
-- Caches ответы to `steam_cаche.json` (TTL 7 days) — меньше 429 при повтortных запусках
-- Exports results to CSV (semicolon-separated, `;`) for Excel
-- Correctly detects items with `Summoned Unit` slot, including **Maraxiform's Fallen**
-- Independent of displayed item name: renaming an instance doesn't interfere with slot determination
 
-### Item Filters
+STEAM_INVENTORY_URL = "https://steamcommunity.com/inventory/{steamid}/570/2?l=english&count=2000"
+CACHE_FILE = Path("steam_cache.json")
+OUTPUT_FILE = Path("steam_output.csv")
+CACHE_TTL_DAYS = 7
 
-- **Quality**: `Auspicious`, `Genuine`, `Unusual`, `Corrupted`, `Autographed`, `Inscribed`
-- **Rarity**: `Arcana`
-- **Type**: `Courier`
-- **Slot**: `Summoned Unit`
-- **Hero + Gem**: only `11` heroes with valuable gems (see below)
-- **Target Items**: `Almond the Frondillo` (override — matched by name regardless of hero)
 
----
+INTERESTING_QUALITIES = {
+    "auspicious",
+    "genuine",
+    "unusual",
+    "corrupted",
+    "autographed",
+    "inscribed",
+}
 
-## 🛠 Requirements
 
-- Python 3.10+
-- Access to public Steam Community inventories
-- `aiohttp` library
+COURIER_TYPE_KEYWORDS = ("courier",)
+SUMMONED_SLOT_KEYWORDS = ("summoned unit", "призванное существо")
+TARGET_ITEM_NAMES = {
+    "almond the frondillo",
+}
+ARCANA_RARITY_KEYWORDS = ("arcana", "rarity_arcana")
 
-## 📦 Installation
 
-```bash
-git clone https://github.com/YOUR_USERNAME/steam-dota2-inventory-parser.git
-cd steam-dota2-inventory-parser
-```
+# Empty sockets
+IGNORE_GEM_PATTERNS = (
+    "empty socket general",
+    "empty socket",
+    "socket empty",
+)
 
-Create and activate a virtual environment.
 
-### Windows PowerShell
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+# Pure stat gems (run counters, first blood stats, etc.)
+IGNORE_GEM_STAT_PATTERNS = (
+    "team first blood, tower or roshan",
+    "ti8 rune",
+    "ti7 rune",
+    "ti rune",
+    "games watched:",
+    "omnislash kills:",
+    "rune of the bladeform legacy",
+)
 
-### Windows CMD
-```bat
-python -m venv .venv
-.venv\Scripts\activate.bat
-```
 
-### Install dependencies
-```bash
-pip install -r requirements.txt
-```
+# Meaningful gem modifiers
+INTERESTING_GEM_PATTERNS = (
+    "kinetic gem",
+    "prismatic gem",
+    "corrupted gem",
+    "inscribed gem",
+)
 
----
 
-## 📄 Preparing SteamID List
+# 12 heroes with valuable gems
+GEM_HEROES = {
+    "doom",
+    "juggernaut",
+    "kunkka",
+    "phantom lancer",
+    "puck",
+    "pudge",
+    "sven",
+    "techies",
+    "terrorblade",
+    "tusk",
+    "wraith king",
+    "dragon knight",
+}
 
-Create `steamids.txt` in the script folder. One SteamID64 per line:
 
-```
-76561198000000001
-76561198000000002
-76561198000000003
-```
+class SteamProfileParser:
+    """
+    Main parser class:
+    - fetches inventories
+    - extracts interesting items
+    """
 
-Lines starting with `#` are ignored:
 
-```
-# Test profiles
-76561198000000001
-76561198000000002
-```
+    def __init__(self) -> None:
+        self.cache: Dict[str, Any] = {}
 
-Use **SteamID64 specifically**, not a profile link or account short name.
 
----
+    # -------------------------- Cache management -------------------------- #
 
-## 🚀 Running
 
-### Windows PowerShell
-```powershell
-.\.venv\Scripts\python.exe .\steam_parser.py
-```
+    def _load_cache(self) -> None:
+        if CACHE_FILE.exists():
+            try:
+                data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+                self.cache = data.get("profiles", {})
+                log.info("Loaded cache with %d profiles", len(self.cache))
+            except Exception as e:
+                log.warning("Failed to load cache: %s", e)
+                self.cache = {}
 
-### Regular run (output to file only)
-```bash
-python steam_parser.py > steam_output.csv 2>&1
-```
 
-After completion, a file appears: `steam_output.csv`
+    def _save_cache(self) -> None:
+        try:
+            CACHE_FILE.write_text(
+                json.dumps(
+                    {"profiles": self.cache, "updated_at": datetime.now().isoformat()},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            log.warning("Failed to save cache: %s", e)
 
----
 
-## 📊 CSV Columns
+    def _is_cache_valid(self, profile_data: Dict[str, Any]) -> bool:
+        cached_at = profile_data.get("cached_at")
+        if not cached_at:
+            return False
 
-| Column | Description |
-|---|---|
-| `SteamID` | SteamID64 of the inventory owner |
-| `Name` | Display name of the item |
-| `Quality` | Matching quality if found |
-| `Rarity` | Matching rarity if found |
-| `Type` | Item type, e.g. `Courier` |
-| `Slot` | Item slot, e.g. `Summoned Unit` |
-| `Hero` | Hero name if detected (e.g. `Pudge`, `Juggernaut`) |
-| `HasGem` | `yes` if a matching gem modifier is found |
-| `TradeFlags` | Trading restrictions from inventory data |
-| `TradableAfter` | Time when the item becomes tradable again |
-| `ProfileURL` | Link to the profile inventory |
 
-> The CSV uses `;` as separator — double-click opens correctly in Excel (RU/DE locales).
+        try:
+            cached_time = datetime.fromisoformat(cached_at)
+            return datetime.now() - cached_time < timedelta(days=CACHE_TTL_DAYS)
+        except Exception:
+            return False
 
----
 
-## 🎯 Hero + Gem Filter
+    # -------------------------- HTTP fetching -------------------------- #
 
-The script filters items by **12 heroes with valuable gems**:
 
-- `Doom`
-- `Juggernaut`
-- `Kunkka`
-- `Phantom Lancer`
-- `Puck`
-- `Pudge`
-- `Sven`
-- `Techies`
-- `Terrorblade`
-- `Tusk`
-- `Wraith King`
+    async def fetch_profile(
+        self, session: aiohttp.ClientSession, steamid: str
+    ) -> Dict[str, Any] | None:
+        """
+        Returns inventory profile for given SteamID.
 
-Only items from these heroes **with gems** are included. Couriers and target items (e.g. `Almond the Frondillo`) are included regardless of hero.
+        Logic:
+        - If profile is cached and still valid, return it.
+        - Otherwise, request Steam inventory endpoint.
+        - On HTTP 429 (Too Many Requests), waits and retries up to 3 times.
+        - On success, cache the profile and return it.
+        """
 
----
+        url = STEAM_INVENTORY_URL.format(steamid=steamid)
+        retry_pause = 80  # seconds to wait on 429 before retrying
+        max_retries = 3
 
-## 🔍 Summoned Unit Filtering
+        for attempt in range(max_retries):
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 429:
+                        if attempt < max_retries - 1:
+                            log.warning(
+                                "HTTP 429 for profile %s (attempt %d/%d), waiting %d seconds",
+                                steamid,
+                                attempt + 1,
+                                max_retries,
+                                retry_pause,
+                            )
+                            await asyncio.sleep(retry_pause)
+                            continue  # Retry
+                        else:
+                            log.warning(
+                                "HTTP 429 for profile %s: all %d retries exhausted, skipping",
+                                steamid,
+                                max_retries,
+                            )
+                            return None
 
-For items in the `Summoned Unit` slot, the Steam API tag is used:
+                    elif resp.status == 403:
+                        log.debug("Profile %s returned 403 (private/banned), skipping", steamid)
+                        return None
 
-```
-category = Slot
-internal_name = summon
-localized_tag_name = Summoned Unit
-```
+                    elif resp.status != 200:
+                        log.warning(
+                            "Failed to fetch profile %s: status=%s",
+                            steamid,
+                            resp.status,
+                        )
+                        return None
+                    else:
+                        data = await resp.json()
+                        break  # Success!
 
-For example, `Maraxiform's Fallen` is identified by slot, not just by name. Even if the owner renamed the item, filtering still works.
+            except asyncio.TimeoutError:
+                log.warning("Timeout fetching profile %s (attempt %d/%d)", steamid, attempt + 1, max_retries)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_pause)
+                    continue
+                return None
+            except Exception as e:
+                log.exception("Error fetching profile %s: %s", steamid, e)
+                return None
 
-In the Steam API, the display name of the tag is usually in:
+        profile_data = {
+            "steamid": steamid,
+            "cached_at": datetime.now().isoformat(),
+            "assets": data.get("assets", []),
+            "descriptions": data.get("descriptions", []),
+        }
 
-```python
-localized_tag_name
-```
+        log.info(
+            "Fetched and cached profile: %s (assets=%d, descriptions=%d)",
+            steamid,
+            len(profile_data["assets"]),
+            len(profile_data["descriptions"]),
+        )
+        return profile_data
 
-not necessarily in the `name` field. For handling tags, it's recommended to use:
 
-```python
-name = str(
+    # -------------------------- Helpers for tags -------------------------- #
+
+
+    @staticmethod
+    def _build_desc_map(descriptions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        return {
+            f"{d.get('classid')}_{d.get('instanceid')}": d
+            for d in descriptions
+        }
+
+
+    @staticmethod
+    def _extract_tags(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return desc.get("tags") or []
+
+
+    @staticmethod
+    def _extract_quality(tags: List[Dict[str, Any]]) -> str:
+        for tag in tags:
+            category = str(tag.get("category", "")).lower()
+            name = str(
     tag.get("localized_tag_name")
     or tag.get("name")
     or ""
 ).lower()
-)
-```
+            internal = str(tag.get("internal_name", "")).lower()
 
----
 
-## ⏱ Request Rate Limiting
+            if "quality" in category:
+                for q in INTERESTING_QUALITIES:
+                    if q in name or q in internal:
+                        return q.capitalize()
 
-The script does not attempt to bypass Steam limitations.
 
-| HTTP Code | Meaning | Script Action |
-|---|---|---|
-| `200` | Inventory successfully retrieved | Processes items |
-| `403` | Access to inventory forbidden | Skips profile immediately |
-| `429` | Too many requests | Waits **80 seconds**, retries (up to 3 attempts total) |
-| Other | Request/server error | Logs and skips profile |
+        return ""
 
-Sequential checking parameters are set in `main()`:
 
-```python
-items = await parser.parse_profiles(
-    steamids,
-    max_concurrent=1,
-    delay=4.0,
-)
-```
+    @staticmethod
+    def _extract_rarity(tags: List[Dict[str, Any]]) -> str:
+        for tag in tags:
+            category = str(tag.get("category", "")).lower()
+            name = str(
+    tag.get("localized_tag_name")
+    or tag.get("name")
+    or ""
+).lower()
+            internal = str(tag.get("internal_name", "")).lower()
 
-It's recommended to keep `max_concurrent=1` — reduces the likelihood of `429`.
 
-> **Why 80 seconds?** This pause was tested against various values (120/90/70/80) — 80s is the sweet spot to reliably bypass the 429 limit.
+            if "rarity" in category:
+                if any(kw in name for kw in ARCANA_RARITY_KEYWORDS) or any(
+                    kw in internal for kw in ARCANA_RARITY_KEYWORDS
+                ):
+                    return "Arcana"
 
----
 
-## 🧮 Excel and SteamID64
+        return ""
 
-SteamID64 consists of 17 digits. Excel might display it in scientific notation:
 
-```
-7.65612E+16
-```
+    @staticmethod
+    def _extract_type(tags: List[Dict[str, Any]]) -> str:
+        for tag in tags:
+            category = str(tag.get("category", "")).lower()
+            name = str(
+    tag.get("localized_tag_name")
+    or tag.get("name")
+    or ""
+).lower()
+            internal = str(tag.get("internal_name", "")).lower()
 
-and lose precision when saving again.
 
-When importing CSV, specify **Text** format for the `SteamID` column.
+            if "type" in category:
+                if any(marker in name for marker in COURIER_TYPE_KEYWORDS) or any(
+                    marker in internal for marker in COURIER_TYPE_KEYWORDS
+                ):
+                    return "Courier"
 
-To enable filtering in Excel:
-1. Open `steam_output.csv`
-2. Select any cell in the table
-3. Open the **Data** tab
-4. Click **Filter**
-5. When sorting, enable **My data has headers**
 
----
+        return ""
 
-## 📸 Screenshots
 
-### Successful Scan Log
+    @staticmethod
+    def _extract_slot(tags: List[Dict[str, Any]]) -> str:
+        for tag in tags:
+            category = str(tag.get("category", "")).lower()
+            internal = str(tag.get("internal_name", "")).lower()
+            localized_name = str(
+                tag.get("localized_tag_name")
+                or tag.get("name")
+                or ""
+            ).lower()
 
-<table>
-  <tr>
-    <td align="center"><img src="screenshots/successful_scan_log_1.png" width="460"/></td>
-    <td align="center"><img src="screenshots/successful_scan_log_2.png" width="460"/></td>
-  </tr>
-</table>
 
-### CSV Output Example
+            if category == "slot" and (
+                internal == "summon"
+                or localized_name == "summoned unit"
+            ):
+                return "Summoned Unit"
 
-<p align="center"><img src="screenshots/csv_output_example.png" width="700"/></p>
 
----
+        return ""
+    
+    @staticmethod
+    def _is_target_item(desc: Dict[str, Any]) -> bool:
+        names_to_check = (
+            desc.get("name"),
+            desc.get("market_hash_name"),
+        )
 
-## 📁 Project Structure
 
-```text
-steam-dota2-inventory-parser/
-├── steam_parser.py
-├── steamids.txt.example
-├── requirements.txt
-├── README.md
-├── .gitignore
-└── screenshots/
-    ├── successful_scan_log_1.png
-    ├── successful_scan_log_2.png
-    └── csv_output_example.png
-```
+        for value in names_to_check:
+            if not isinstance(value, str):
+                continue
 
-Generated at runtime (not committed):
 
-```text
-steam_output.csv
-steam_cache.json
-```
+            normalized_name = " ".join(value.lower().split())
 
----
 
-## 📝 Notes
+            if normalized_name in TARGET_ITEM_NAMES:
+                return True
 
-- The script only sees public inventories.
-- HTTP `403` might mean private inventory, access restriction, or unavailable profile; it's not necessarily an account ban.
-- Item states are current only at scan time: an item might be bought, sold, or traded afterwards.
-- Custom item names might display incorrectly with encoding issues, but filtering by technical Steam tags isn't affected.
-- Don't publish personal SteamID lists, tokens, cookies, or other private data in GitHub repositories.
 
----
+        return False
+    
+    @staticmethod
+    def _extract_gem_flag(desc: Dict[str, Any]) -> bool:
+        """
+        Gem flag with priority:
 
-## ⚠️ Disclaimer
 
-Use the project at your own risk and comply with Steam rules, public endpoint limitations, and applicable platform regulations.
+        1. Build blob from name, market_hash_name, descriptions.
+        2. If blob contains any INTERESTING_GEM_PATTERNS -> True.
+        3. Else if blob contains IGNORE_GEM_PATTERNS or IGNORE_GEM_STAT_PATTERNS -> False.
+        4. Else if blob contains 'gem' -> True.
+        5. Else -> False.
+        """
+        parts: List[str] = []
+
+
+        for key in ("name", "market_hash_name"):
+            value = desc.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+
+
+        extra_desc = desc.get("descriptions") or []
+        for entry in extra_desc:
+            if isinstance(entry, dict):
+                value = entry.get("value")
+                if isinstance(value, str):
+                    parts.append(value)
+
+
+        blob = " ".join(parts).lower()
+
+
+        if any(pattern in blob for pattern in INTERESTING_GEM_PATTERNS):
+            return True
+
+
+        if any(ignore in blob for ignore in IGNORE_GEM_PATTERNS):
+            return False
+        if any(ignore in blob for ignore in IGNORE_GEM_STAT_PATTERNS):
+            return False
+
+
+        return "gem" in blob
+
+
+    @staticmethod
+    def _extract_hero(desc: Dict[str, Any]) -> str:
+        """
+        Extract hero name from item description.
+        """
+        # Check in tags
+        tags = desc.get("tags") or []
+        for tag in tags:
+            category = str(tag.get("category", "")).lower()
+            name = str(
+                tag.get("localized_tag_name")
+                or tag.get("name")
+                or ""
+            ).lower()
+            internal = str(tag.get("internal_name", "")).lower()
+
+
+            if "hero" in category or "class" in category:
+                # Return first word (hero name)
+                hero_name = name.split()[0] if name else ""
+                if hero_name:
+                    return hero_name.capitalize()
+
+
+        # Check in name/market_hash_name
+        for key in ("name", "market_hash_name"):
+            value = desc.get(key)
+            if isinstance(value, str):
+                # Try to extract hero name from item name
+                # Example: "Juggernaut's Blade" -> "Juggernaut"
+                parts = value.lower().split()
+                if parts:
+                    hero_candidate = parts[0].capitalize()
+                    if hero_candidate.lower() in GEM_HEROES:
+                        return hero_candidate
+
+
+        return ""
+
+
+    # -------------------------- Trade info -------------------------- #
+
+
+    @staticmethod
+    def _extract_trade_info(asset: Dict[str, Any]) -> Dict[str, str]:
+        restriction = asset.get("market_tradable_restriction")
+        tradable_after = asset.get("tradable_after")
+
+
+        flags = []
+        if restriction is not None:
+            flags.append(f"restriction={restriction}")
+
+
+        return {
+            "trade_flags": ",".join(flags),
+            "tradable_after": str(tradable_after) if tradable_after is not None else "",
+        }
+
+
+    # -------------------------- Main extraction -------------------------- #
+
+
+    def extract_interesting_items(
+        self, profile_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        assets = profile_data.get("assets", [])
+        descriptions = profile_data.get("descriptions", [])
+
+
+        desc_map = self._build_desc_map(descriptions)
+        results: List[Dict[str, Any]] = []
+
+
+        for asset in assets:
+            classid = asset.get("classid")
+            instanceid = asset.get("instanceid")
+            if not classid:
+                continue
+
+
+            desc_key = f"{classid}_{instanceid}"
+            desc = desc_map.get(desc_key, {})
+
+
+            item_name = desc.get("name", "Unknown")
+            is_target_item = self._is_target_item(desc)
+
+
+            tags = self._extract_tags(desc)
+
+
+            quality = self._extract_quality(tags)
+            rarity = self._extract_rarity(tags)
+            item_type = self._extract_type(tags)
+            slot = self._extract_slot(tags)
+            has_gem = self._extract_gem_flag(desc)
+            hero = self._extract_hero(desc)
+
+
+            if is_target_item:
+                slot = "Summoned Unit"
+
+
+            # Filter: only 13 heroes with gems OR couriers
+            should_include = False
+
+
+            # Couriers (by type)
+            if item_type == "Courier":
+                should_include = True
+
+
+            # Heroes with gems (only 13 specified)
+            elif has_gem and hero.lower() in GEM_HEROES:
+                should_include = True
+
+
+            # Target items (Almond, etc.)
+            elif is_target_item:
+                should_include = True
+
+
+            # Other interesting items (quality, rarity, slot)
+            elif any([quality, rarity, slot]):
+                should_include = True
+
+
+            if not should_include:
+                continue
+
+
+            trade_info = self._extract_trade_info(asset)
+
+
+            results.append(
+                {
+                    "steamid": profile_data.get("steamid"),
+                    "name": item_name,
+                    "quality": quality,
+                    "rarity": rarity,
+                    "type": item_type,
+                    "slot": slot,
+                    "hero": hero,
+                    "has_gem": "yes" if has_gem else "",
+                    "trade_flags": trade_info["trade_flags"],
+                    "tradable_after": trade_info["tradable_after"],
+                }
+            )
+
+
+        return results
+
+
+    # -------------------------- Parsing profiles -------------------------- #
+
+
+    async def parse_profiles(
+        self, steamids: List[str], max_concurrent: int = 1, delay: float = 4.0
+    ) -> List[Dict[str, Any]]:
+        async def fetch_with_delay(
+            steamid: str, semaphore: asyncio.Semaphore, session: aiohttp.ClientSession
+        ) -> Dict[str, Any] | None:
+            async with semaphore:
+                profile = await self.fetch_profile(session, steamid)
+                await asyncio.sleep(delay)
+                return profile
+
+
+        async with aiohttp.ClientSession() as session:
+            semaphore = asyncio.Semaphore(max_concurrent)
+            tasks = [
+                fetch_with_delay(steamid, semaphore, session)
+                for steamid in steamids
+            ]
+            profiles = await asyncio.gather(*tasks, return_exceptions=True)
+
+
+        all_items: List[Dict[str, Any]] = []
+
+
+        for profile_data in profiles:
+            if isinstance(profile_data, Exception):
+                continue
+            if profile_data is None:
+                continue
+
+
+            items = self.extract_interesting_items(profile_data)
+            all_items.extend(items)
+
+
+        log.info(
+            "Parsed %d profiles, found %d interesting items",
+            len([p for p in profiles if not isinstance(p, Exception)]),
+            len(all_items),
+        )
+
+
+        return all_items
+
+
+# -------------------------- Script entrypoint -------------------------- #
+
+
+async def main() -> None:
+    import sys
+    sys.stdout.reconfigure(encoding='utf-8')
+    
+    steamids_file = Path("steamids.txt")
+    
+    if not steamids_file.exists():
+        log.error("steamids.txt not found. Create it with one SteamID64 per line.")
+        return
+    
+    steamids = [
+        line.strip()
+        for line in steamids_file.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    
+    if not steamids:
+        log.error("No SteamIDs found in steamids.txt")
+        return
+    
+    log.info("Loaded %d SteamIDs from steamids.txt", len(steamids))
+    
+    parser = SteamProfileParser()
+    items = await parser.parse_profiles(steamids, max_concurrent=1, delay=4.0)
+    
+    # CSV header
+    csv_header = "SteamID;Name;Quality;Rarity;Type;Slot;Hero;HasGem;TradeFlags;TradableAfter;ProfileURL"
+    csv_lines = [csv_header]
+    
+    for item in items:
+        steamid = item["steamid"]
+        name = item["name"].replace(";", ",")
+        quality = item["quality"]
+        rarity = item["rarity"]
+        item_type = item["type"]
+        slot = item["slot"]
+        hero = item["hero"]
+        has_gem = item["has_gem"]
+        trade_flags = item["trade_flags"]
+        tradable_after = item["tradable_after"]
+        profile_url = f"https://steamcommunity.com/profiles/{steamid}/inventory"
+        
+        csv_line = (
+            f"{steamid};{name};{quality};{rarity};{item_type};{slot};{hero};"
+            f"{has_gem};{trade_flags};{tradable_after};{profile_url}"
+        )
+        csv_lines.append(csv_line)
+    
+    # Save to file
+    try:
+        OUTPUT_FILE.write_text("\n".join(csv_lines), encoding="utf-8")
+        log.info("Saved %d items to %s", len(items), OUTPUT_FILE)
+    except PermissionError:
+        log.error("File %s is open in another program. Close it and run again.", OUTPUT_FILE)
+    
+    # Also print to stdout
+    print(csv_header)
+    for line in csv_lines[1:]:
+        print(line)
+    
+    log.info("Total interesting items: %d", len(items))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
