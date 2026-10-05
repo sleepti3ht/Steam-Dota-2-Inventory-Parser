@@ -1,7 +1,7 @@
 
 <div align="center">
     
-# steam-dota2-inventory-parser
+# Steam dota2 inventory parser
 
 [![python](https://img.shields.io/badge/Python-3.10+-blue?style=flat&color=3776ab)](https://python.org)
 [![status](https://img.shields.io/badge/status-active-success?style=flat&color=2ea043)](#)
